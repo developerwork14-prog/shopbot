@@ -91,36 +91,67 @@ def build_catalog_context(products):
 
 def fallback_answer(user_message, products):
     matched = find_matching_products(products, user_message)
+    message = user_message.lower()
 
     if matched:
         return "I found a few Taffuzo products that may match your question.", matched
 
+    if "cat" in message or "kitten" in message:
+        return (
+            "For cats, choose food based on age first. Kittens need kitten food with higher "
+            "protein and calories, while adult cats need a complete balanced cat food. If "
+            "your cat is picky, start with small portions and introduce new food slowly over "
+            "7 days. Avoid dog food for cats because cats need taurine and cat-specific "
+            "nutrition."
+        ), []
+
+    if "puppy" in message or "month" in message or "old" in message:
+        return (
+            "For a young dog, choose puppy or growth-stage food until adulthood. An "
+            "11-month dog may still need puppy food if they are medium or large breed, while "
+            "small breeds may be ready to slowly move to adult food. Change food gradually "
+            "over 7 days and check with a vet if your dog has allergies, vomiting, or loose stools."
+        ), []
+
+    if "treat" in message or "biscuit" in message:
+        return (
+            "Treats are best used as a small part of the daily diet, usually under 10% of "
+            "daily calories. Look for simple ingredients, avoid too many treats in one day, "
+            "and pick the right size for your pet."
+        ), []
+
     return (
-        "I can help with dog and cat food suggestions. Please tell me your pet's age, "
-        "breed size, and whether you want food, treats, or supplements."
+        "I can help with pet food, treats, and product suggestions. Tell me your pet's age, "
+        "breed size, and what you are looking for, and I will suggest a good option."
     ), []
 
 
 def generate_ai_answer(user_message, products):
     if not openai_client:
-        return fallback_answer(user_message, products)
+        answer, product_suggestions = fallback_answer(user_message, products)
+        return answer, product_suggestions, False
 
     product_suggestions = find_matching_products(products, user_message)
     catalog_context = build_catalog_context(products)
 
     response = openai_client.responses.create(
         model=OPENAI_MODEL,
+        max_output_tokens=350,
         input=[
             {
                 "role": "developer",
                 "content": (
-                    "You are Taffuzo ShopBot, a helpful pet food shopping assistant for "
-                    "Taffuzo.com. Answer customer questions about dog and cat food, treats, "
-                    "feeding choices, and product selection. Use the product catalog when "
-                    "recommending products. Keep answers short, friendly, and practical. "
-                    "Do not diagnose medical problems. For illness, allergies, pregnancy, "
-                    "or serious symptoms, suggest checking with a veterinarian. Prices are "
-                    "in Indian rupees."
+                    "You are Taffuzo ShopBot, a friendly AI assistant on Taffuzo.com. "
+                    "Answer customer questions naturally and immediately, like a helpful "
+                    "store assistant. If the question is about pets, dog food, cat food, "
+                    "treats, feeding, ingredients, product choice, orders, or shopping, give "
+                    "a direct useful answer. Use the Taffuzo product catalog when it helps, "
+                    "but do not say you can only search products. If the question is general "
+                    "and not about Taffuzo, still answer briefly and politely, then connect "
+                    "back to pets or shopping if useful. Do not diagnose medical problems. "
+                    "For illness, allergies, pregnancy, poisoning, or serious symptoms, "
+                    "recommend a veterinarian. Keep answers short, practical, and easy for "
+                    "Indian customers to understand. Prices are in Indian rupees."
                 )
             },
             {
@@ -134,7 +165,7 @@ def generate_ai_answer(user_message, products):
     )
 
     answer = response.output_text.strip()
-    return answer, product_suggestions
+    return answer, product_suggestions, True
 
 
 @app.route("/chat", methods=["POST"])
@@ -163,14 +194,25 @@ def chat():
         }), 502
 
     try:
-        answer, suggested_products = generate_ai_answer(user_message, products)
+        answer, suggested_products, ai_enabled = generate_ai_answer(user_message, products)
     except Exception as error:
         answer, suggested_products = fallback_answer(user_message, products)
         answer = f"{answer} AI answer is temporarily unavailable: {error}"
+        ai_enabled = False
 
     return jsonify({
         "answer": answer,
-        "products": suggested_products
+        "products": suggested_products,
+        "ai_enabled": ai_enabled
+    })
+
+
+@app.route("/health")
+def health():
+    return jsonify({
+        "status": "ok",
+        "ai_enabled": bool(openai_client),
+        "model": OPENAI_MODEL
     })
 
 
