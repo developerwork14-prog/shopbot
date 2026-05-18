@@ -1,8 +1,17 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from requests.exceptions import JSONDecodeError, RequestException
 import requests
 
 app = Flask(__name__)
+CORS(app, resources={
+    r"/chat": {
+        "origins": [
+            "https://taffuzo.com",
+            "https://www.taffuzo.com",
+        ]
+    }
+})
 
 WC_URL = "https://taffuzo.com/wp-json/wc/v3/products"
 
