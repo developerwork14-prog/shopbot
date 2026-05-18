@@ -20,7 +20,7 @@ CORS(app, resources={
 })
 
 WC_URL = "https://taffuzo.com/wp-json/wc/v3/products"
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
 CK = "ck_0e43ab1bb8ea5984bea7d3a9ff048759e1705698"
 CS = "cs_28850237b523c3ad67ea291e8246cd92a09fcf8e"
@@ -85,7 +85,7 @@ def find_matching_products(products, user_message):
 def build_catalog_context(products):
     catalog_lines = []
 
-    for product in products[:30]:
+    for product in products[:10]:
         item = format_product(product)
         catalog_lines.append(
             f"- {item['name']} | Price: INR {item['price'] or 'not listed'} | URL: {item['url']}"
@@ -191,7 +191,7 @@ def chat():
         answer, suggested_products, ai_enabled = generate_ai_answer(user_message, products)
     except Exception as error:
         answer, suggested_products = fallback_answer(user_message, products)
-        answer = f"{answer} AI answer is temporarily unavailable: {error}"
+        print(f"AI answer is temporarily unavailable: {error}")
         ai_enabled = False
 
     return jsonify({
