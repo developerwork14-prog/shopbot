@@ -2,8 +2,8 @@ import os
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from openai import OpenAI
 from dotenv import load_dotenv
+import google.generativeai as genai
 from requests.exceptions import JSONDecodeError, RequestException
 import requests
 
@@ -20,11 +20,16 @@ CORS(app, resources={
 })
 
 WC_URL = "https://taffuzo.com/wp-json/wc/v3/products"
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 CK = "ck_0e43ab1bb8ea5984bea7d3a9ff048759e1705698"
 CS = "cs_28850237b523c3ad67ea291e8246cd92a09fcf8e"
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) if os.getenv("OPENAI_API_KEY") else None
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+
+if gemini_api_key:
+    genai.configure(api_key=gemini_api_key)
+
+gemini_model = genai.GenerativeModel(GEMINI_MODEL) if gemini_api_key else None
 
 
 def format_product(product):
@@ -127,44 +132,33 @@ def fallback_answer(user_message, products):
 
 
 def generate_ai_answer(user_message, products):
-    if not openai_client:
+    if not gemini_model:
         answer, product_suggestions = fallback_answer(user_message, products)
         return answer, product_suggestions, False
 
     product_suggestions = find_matching_products(products, user_message)
     catalog_context = build_catalog_context(products)
-
-    response = openai_client.responses.create(
-        model=OPENAI_MODEL,
-        max_output_tokens=350,
-        input=[
-            {
-                "role": "developer",
-                "content": (
-                    "You are Taffuzo ShopBot, a friendly AI assistant on Taffuzo.com. "
-                    "Answer customer questions naturally and immediately, like a helpful "
-                    "store assistant. If the question is about pets, dog food, cat food, "
-                    "treats, feeding, ingredients, product choice, orders, or shopping, give "
-                    "a direct useful answer. Use the Taffuzo product catalog when it helps, "
-                    "but do not say you can only search products. If the question is general "
-                    "and not about Taffuzo, still answer briefly and politely, then connect "
-                    "back to pets or shopping if useful. Do not diagnose medical problems. "
-                    "For illness, allergies, pregnancy, poisoning, or serious symptoms, "
-                    "recommend a veterinarian. Keep answers short, practical, and easy for "
-                    "Indian customers to understand. Prices are in Indian rupees."
-                )
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Customer question: {user_message}\n\n"
-                    f"Taffuzo product catalog:\n{catalog_context}"
-                )
-            }
-        ]
+    prompt = (
+        "You are Taffuzo ShopBot, a friendly AI assistant on Taffuzo.com.\n"
+        "Answer customer questions naturally and immediately, like a helpful store assistant.\n"
+        "If the question is about pets, dog food, cat food, treats, feeding, ingredients, "
+        "product choice, orders, or shopping, give a direct useful answer.\n"
+        "Use the Taffuzo product catalog when it helps, but do not say you can only search products.\n"
+        "If the question is general and not about Taffuzo, still answer briefly and politely, "
+        "then connect back to pets or shopping if useful.\n"
+        "Do not diagnose medical problems. For illness, allergies, pregnancy, poisoning, or "
+        "serious symptoms, recommend a veterinarian.\n"
+        "Keep answers short, practical, and easy for Indian customers to understand. "
+        "Prices are in Indian rupees.\n\n"
+        f"Customer question: {user_message}\n\n"
+        f"Taffuzo product catalog:\n{catalog_context}"
     )
 
-    answer = response.output_text.strip()
+    response = gemini_model.generate_content(
+        prompt,
+        generation_config={"max_output_tokens": 350}
+    )
+    answer = response.text.strip()
     return answer, product_suggestions, True
 
 
@@ -211,8 +205,9 @@ def chat():
 def health():
     return jsonify({
         "status": "ok",
-        "ai_enabled": bool(openai_client),
-        "model": OPENAI_MODEL
+        "ai_enabled": bool(gemini_model),
+        "provider": "gemini",
+        "model": GEMINI_MODEL
     })
 
 
