@@ -178,6 +178,139 @@ def is_product_overview_question(user_message):
     return any(phrase in message for phrase in overview_phrases)
 
 
+def extract_age_months(user_message):
+    message = user_message.lower()
+    match = re.search(r"\b(\d{1,2})\s*(month|months|mo)\b", message)
+
+    if match:
+        return int(match.group(1))
+
+    year_match = re.search(r"\b(\d{1,2})\s*(year|years|yr|yrs)\b", message)
+
+    if year_match:
+        return int(year_match.group(1)) * 12
+
+    return None
+
+
+def detect_pet_type(user_message):
+    message = user_message.lower()
+
+    if "cat" in message or "kitten" in message:
+        return "cat"
+
+    if "dog" in message or "puppy" in message:
+        return "dog"
+
+    return None
+
+
+def is_age_question(user_message):
+    message = user_message.lower()
+
+    return (
+        extract_age_months(user_message) is not None
+        or "age" in message
+        or "old" in message
+        or "puppy" in message
+        or "kitten" in message
+    )
+
+
+def format_age(age_months):
+    if age_months is None:
+        return "this age"
+
+    if age_months % 12 == 0:
+        years = age_months // 12
+        label = "year" if years == 1 else "years"
+        return f"{years} {label}"
+
+    return f"{age_months} months"
+
+
+def dog_age_answer(age_months):
+    if age_months is None:
+        return (
+            "For dogs, choose food based on age and breed size. Puppies usually need "
+            "growth-stage food, adult dogs need adult maintenance food, and senior dogs may "
+            "need easier-to-digest food. Switch any new food gradually over 7 days."
+        )
+
+    if age_months < 12:
+        return (
+            f"At {format_age(age_months)}, your dog is usually still in the puppy/growth stage. "
+            "Choose puppy or growth-stage dog food, especially for medium and large breeds. "
+            "Feed measured portions and change food gradually over 7 days."
+        )
+
+    if age_months <= 18:
+        return (
+            f"At {format_age(age_months)}, your dog is usually ready for adult dog food, especially "
+            "if they are a small or medium breed. Large breeds can sometimes stay on "
+            "growth-stage food a little longer, so breed size matters. Switch gradually over "
+            "7 days and watch for loose stools, vomiting, itching, or low appetite."
+        )
+
+    if age_months >= 84:
+        return (
+            f"At {format_age(age_months)}, your dog is in the senior stage. Choose adult or "
+            "senior dog food based on activity level, digestion, dental comfort, and weight. "
+            "For joint issues, appetite changes, or illness, check with a vet."
+        )
+
+    return (
+        f"At {format_age(age_months)}, your dog is an adult. Choose adult dog food based on breed "
+        "size, activity level, and any sensitivity. Introduce any new food slowly over 7 days."
+    )
+
+
+def cat_age_answer(age_months):
+    if age_months is None:
+        return (
+            "For cats, choose food based on age first. Kittens need kitten food with higher "
+            "protein and calories, adult cats need complete balanced cat food, and senior "
+            "cats may need easier-to-digest food. Avoid dog food for cats because cats need "
+            "cat-specific nutrients like taurine."
+        )
+
+    if age_months < 12:
+        return (
+            f"At {format_age(age_months)}, your cat is still a kitten. Choose kitten food "
+            "with higher protein and calories, feed small measured meals, and introduce new "
+            "food slowly over 7 days."
+        )
+
+    if age_months >= 84:
+        return (
+            f"At {format_age(age_months)}, your cat is in the senior stage. Choose complete "
+            "cat food that supports digestion and healthy weight, and ask a vet if there are "
+            "kidney, dental, appetite, or weight concerns."
+        )
+
+    return (
+        f"At {format_age(age_months)}, your cat is an adult. Choose complete balanced adult "
+        "cat food, introduce new food slowly over 7 days, and avoid dog food because cats "
+        "need cat-specific nutrition."
+    )
+
+
+def pet_age_answer(user_message):
+    pet_type = detect_pet_type(user_message)
+    age_months = extract_age_months(user_message)
+
+    if pet_type == "cat":
+        return cat_age_answer(age_months)
+
+    if pet_type == "dog":
+        return dog_age_answer(age_months)
+
+    return (
+        "Please tell me whether the pet is a dog or cat, plus the age in months or years, "
+        "and I can suggest the right feeding stage."
+    )
+
+
 def describe_product_details(product):
     details = product_text(product)
     item = format_product(product)
@@ -236,32 +369,24 @@ def fallback_answer(user_message, products):
     if matched_records and is_ingredient_question(user_message):
         return describe_product_details(matched_records[0]), matched
 
-    if matched:
-        return "I found a few Taffuzo products that may match your question.", matched
+    if is_age_question(user_message):
+        return pet_age_answer(user_message), matched
 
-    if "cat" in message or "kitten" in message:
-        return (
-            "For cats, choose food based on age first. Kittens need kitten food with higher "
-            "protein and calories, while adult cats need a complete balanced cat food. If "
-            "your cat is picky, start with small portions and introduce new food slowly over "
-            "7 days. Avoid dog food for cats because cats need taurine and cat-specific "
-            "nutrition."
-        ), []
-
-    if "puppy" in message or "month" in message or "old" in message:
-        return (
-            "For a young dog, choose puppy or growth-stage food until adulthood. An "
-            "11-month dog may still need puppy food if they are medium or large breed, while "
-            "small breeds may be ready to slowly move to adult food. Change food gradually "
-            "over 7 days and check with a vet if your dog has allergies, vomiting, or loose stools."
-        ), []
+    if "cat" in message:
+        return cat_age_answer(None), matched
 
     if "treat" in message or "biscuit" in message:
         return (
             "Treats are best used as a small part of the daily diet, usually under 10% of "
             "daily calories. Look for simple ingredients, avoid too many treats in one day, "
             "and pick the right size for your pet."
-        ), []
+        ), matched
+
+    if matched:
+        return (
+            "Here are a few Taffuzo products that may fit. Tell me your pet type, age, "
+            "and preference, and I can narrow it down."
+        ), matched
 
     return (
         "I can help with pet food, treats, and product suggestions. Tell me your pet's age, "
@@ -269,7 +394,7 @@ def fallback_answer(user_message, products):
     ), []
 
 
-def generate_ai_answer(user_message, products):
+def generate_ai_answer_legacy(user_message, products):
     if not gemini_model:
         answer, product_suggestions = fallback_answer(user_message, products)
         return answer, product_suggestions, False
@@ -279,6 +404,9 @@ def generate_ai_answer(user_message, products):
     prompt = (
     "You are Taffuzo ShopBot, a friendly AI assistant on Taffuzo.com.\n"
     "Answer customer questions naturally and immediately, like a helpful store assistant.\n"
+    "When the customer mentions a dog or cat age, such as 6 months, 13 months, "
+    "2 years old, puppy, or kitten, answer with age-appropriate feeding guidance "
+    "for that pet type before suggesting products.\n"
     "When the customer asks about products, what you sell, your catalog, or anything general "
     "about the store, summarize the available products from the catalog clearly and helpfully. "
     "Never say 'I found a few products that may match' — always give a real answer.\n"
@@ -299,6 +427,46 @@ def generate_ai_answer(user_message, products):
     f"Customer question: {user_message}\n\n"
     f"Taffuzo product catalog:\n{catalog_context}"
 )
+
+    response = gemini_model.generate_content(
+        prompt,
+        generation_config={"max_output_tokens": 350}
+    )
+    answer = response.text.strip()
+    return answer, product_suggestions, True
+
+
+def generate_ai_answer(user_message, products):
+    if not gemini_model:
+        answer, product_suggestions = fallback_answer(user_message, products)
+        return answer, product_suggestions, False
+
+    product_suggestions = find_matching_products(products, user_message)
+    catalog_context = build_catalog_context(products)
+    prompt = (
+        "You are Taffuzo ShopBot, a friendly AI assistant on Taffuzo.com.\n"
+        "Taffuzo sells pet food and treats for dogs and cats. Help customers choose products, "
+        "understand feeding, ingredients, treats, shopping, and general pet-food questions.\n"
+        "Answer naturally and immediately like a helpful store assistant. Do not behave like "
+        "a keyword search engine.\n"
+        "If the question is not covered by a fixed rule, still answer using common pet-care "
+        "knowledge and the Taffuzo catalog context. If exact Taffuzo information is not in "
+        "the catalog, say so briefly and give the best practical guidance.\n"
+        "When the customer mentions a dog or cat age, such as 6 months, 13 months, 2 years old, "
+        "puppy, or kitten, answer with age-appropriate feeding guidance for that pet type before "
+        "suggesting products.\n"
+        "When the customer asks about products, what you sell, your catalog, or anything general "
+        "about the store, summarize the available products from the catalog clearly and helpfully. "
+        "Never say 'I found a few products that may match' - always give a real answer.\n"
+        "When the customer asks about a specific product's ingredients, contents, or what it is "
+        "made from, answer with the ingredient/details information from the product catalog.\n"
+        "Do not diagnose medical problems. For illness, allergies, pregnancy, poisoning, or serious "
+        "symptoms, recommend a veterinarian.\n"
+        "Keep answers short, practical, and easy for Indian customers to understand. Prices are "
+        "in Indian rupees.\n\n"
+        f"Customer question: {user_message}\n\n"
+        f"Taffuzo product catalog:\n{catalog_context}"
+    )
 
     response = gemini_model.generate_content(
         prompt,
