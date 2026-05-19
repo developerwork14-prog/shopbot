@@ -515,11 +515,16 @@ def generate_ai_answer_legacy(user_message, products):
 
 
 def generate_ai_answer(user_message, products):
+    matched_records = find_matching_product_records(products, user_message)
+    product_suggestions = [format_product(product) for product in matched_records]
+
+    if matched_records and is_ingredient_question(user_message):
+        return describe_product_details(matched_records[0]), product_suggestions, bool(gemini_model)
+
     if not gemini_model:
         answer, product_suggestions = fallback_answer(user_message, products)
         return answer, product_suggestions, False
 
-    product_suggestions = find_matching_products(products, user_message)
     catalog_context = build_catalog_context(products)
     prompt = (
         "You are Taffuzo ShopBot, a friendly AI assistant on Taffuzo.com.\n"
