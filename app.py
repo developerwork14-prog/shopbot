@@ -1,10 +1,16 @@
 import os
 import re
+import csv
 import sqlite3
 import datetime
+import functools
 from html import unescape
+from io import StringIO
 
-from flask import Flask, request, jsonify
+from flask import (
+    Flask, request, jsonify, render_template_string,
+    session, redirect, url_for, make_response, abort
+)
 from flask_cors import CORS
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -14,6 +20,7 @@ import requests
 load_dotenv()
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(32))
 CORS(app, resources={
     r"/chat": {
         "origins": [
@@ -616,6 +623,507 @@ def generate_ai_answer(user_message, products):
     )
     answer = response.text.strip()
     return answer, product_suggestions, True
+
+
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "taffuzo-admin")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def login_required(f):
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("admin_logged_in"):
+            return redirect(url_for("admin_login"))
+        return f(*args, **kwargs)
+    return decorated
+
+
+ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Taffuzo Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{min-height:100vh;background:#0d0d0d;display:flex;align-items:center;justify-content:center;font-family:'Albert Sans',sans-serif}
+.card{background:#161616;border:1px solid #222;border-radius:18px;padding:44px 40px;width:100%;max-width:380px}
+.logo{font-size:22px;font-weight:900;color:#fff;letter-spacing:-0.03em;margin-bottom:4px}
+.logo span{color:#ffcc00}
+.sub{font-size:12px;color:#555;margin-bottom:32px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase}
+label{display:block;font-size:11px;font-weight:700;color:#666;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:6px}
+input[type=password]{width:100%;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:10px;padding:12px 14px;color:#fff;font-size:14px;font-family:'Albert Sans',sans-serif;outline:none;transition:border-color .15s}
+input[type=password]:focus{border-color:#ffcc00}
+.btn{width:100%;margin-top:20px;background:#ffcc00;color:#000;border:none;padding:14px;border-radius:10px;font-size:14px;font-weight:800;font-family:'Albert Sans',sans-serif;cursor:pointer;transition:background .15s}
+.btn:hover{background:#e6b800}
+.err{background:#1a0000;border:1px solid #3d0000;color:#ff6b6b;border-radius:8px;padding:10px 14px;font-size:12px;margin-top:14px}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Taffuzo<span>.</span></div>
+  <div class="sub">Admin Panel</div>
+  <form method="POST">
+    <label>Password</label>
+    <input type="password" name="password" autofocus placeholder="Enter admin password">
+    {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    <button class="btn" type="submit">Sign In →</button>
+  </form>
+</div>
+</body>
+</html>"""
+
+
+ADMIN_DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pet Match Admin · Taffuzo</title>
+<link href="https://fonts.googleapis.com/css2?family=Albert+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0d0d0d;--surface:#161616;--border:#222;--border2:#2a2a2a;
+  --text:#f0f0f0;--muted:#666;--accent:#ffcc00;--accent-dim:#3d3000;
+  --danger:#ff4444;--danger-dim:#2a0a0a;
+  --dog:#4d9fff;--cat:#c084fc;
+  --male:#60d9fa;--female:#f9a8d4;
+}
+body{min-height:100vh;background:var(--bg);font-family:'Albert Sans',sans-serif;color:var(--text)}
+
+/* ── Top bar ── */
+.topbar{
+  background:var(--surface);border-bottom:1px solid var(--border);
+  padding:0 28px;height:58px;display:flex;align-items:center;justify-content:space-between;
+  position:sticky;top:0;z-index:100;
+}
+.topbar-logo{font-size:18px;font-weight:900;color:#fff;letter-spacing:-0.03em}
+.topbar-logo span{color:var(--accent)}
+.topbar-right{display:flex;align-items:center;gap:12px}
+.badge-live{
+  background:var(--accent-dim);color:var(--accent);border:1px solid #6b5000;
+  padding:4px 10px;border-radius:999px;font-size:11px;font-weight:700;
+  letter-spacing:0.05em;
+}
+.topbar-logout{
+  background:none;border:1px solid var(--border2);color:var(--muted);
+  padding:6px 14px;border-radius:8px;cursor:pointer;font-size:12px;
+  font-family:'Albert Sans',sans-serif;font-weight:600;transition:all .15s;
+}
+.topbar-logout:hover{border-color:var(--danger);color:var(--danger)}
+
+/* ── Layout ── */
+.container{max-width:1200px;margin:0 auto;padding:28px}
+
+/* ── Stat cards ── */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:28px}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 20px}
+.stat-label{font-size:10px;font-weight:700;color:var(--muted);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:8px}
+.stat-value{font-size:28px;font-weight:900;color:var(--text);line-height:1}
+.stat-value.accent{color:var(--accent)}
+.stat-value.dog{color:var(--dog)}
+.stat-value.cat{color:var(--cat)}
+
+/* ── Toolbar ── */
+.toolbar{
+  background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:14px 16px;margin-bottom:16px;
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+}
+.filter-select,.search-input{
+  background:var(--bg);border:1px solid var(--border2);border-radius:8px;
+  padding:8px 12px;color:var(--text);font-size:12px;font-family:'Albert Sans',sans-serif;
+  outline:none;transition:border-color .15s;
+}
+.filter-select:focus,.search-input:focus{border-color:var(--accent)}
+.filter-select option{background:#1a1a1a}
+.search-input{flex:1;min-width:160px}
+.search-input::placeholder{color:var(--muted)}
+.toolbar-gap{flex:1}
+.csv-btn{
+  background:var(--accent);color:#000;border:none;padding:8px 18px;border-radius:8px;
+  cursor:pointer;font-size:12px;font-weight:800;font-family:'Albert Sans',sans-serif;
+  transition:background .15s;white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center;gap:6px;
+}
+.csv-btn:hover{background:#e6b800}
+
+/* ── Table ── */
+.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead{background:#111}
+th{
+  padding:12px 14px;text-align:left;font-size:10px;font-weight:700;
+  color:var(--muted);letter-spacing:0.07em;text-transform:uppercase;border-bottom:1px solid var(--border);
+}
+td{padding:12px 14px;border-bottom:1px solid var(--border2);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(255,255,255,0.02)}
+
+.pill{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 9px;
+  border-radius:999px;font-size:11px;font-weight:700;
+}
+.pill-dog{background:rgba(77,159,255,0.12);color:var(--dog)}
+.pill-cat{background:rgba(192,132,252,0.12);color:var(--cat)}
+.pill-male{background:rgba(96,217,250,0.1);color:var(--male)}
+.pill-female{background:rgba(249,168,212,0.1);color:var(--female)}
+
+.owner-name{font-weight:700;color:var(--text)}
+.owner-phone{font-size:11px;color:var(--muted);margin-top:2px}
+.pet-name{font-weight:800;color:var(--text)}
+.pet-breed{font-size:11px;color:var(--muted);margin-top:1px}
+.city-text{color:var(--text);font-weight:600}
+.date-text{font-size:11px;color:var(--muted)}
+.bio-text{font-size:11px;color:var(--muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.del-btn{
+  background:none;border:1px solid var(--border2);color:var(--muted);
+  width:28px;height:28px;border-radius:7px;cursor:pointer;font-size:14px;
+  display:flex;align-items:center;justify-content:center;transition:all .15s;
+}
+.del-btn:hover{background:var(--danger-dim);border-color:var(--danger);color:var(--danger)}
+
+.empty-row td{text-align:center;padding:48px;color:var(--muted);font-size:13px}
+.empty-icon{font-size:32px;display:block;margin-bottom:10px}
+
+/* count */
+.result-count{font-size:11px;color:var(--muted);margin-bottom:10px;font-weight:600}
+.result-count strong{color:var(--text)}
+
+/* ── Confirm modal ── */
+.modal-bg{
+  position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;
+  display:none;align-items:center;justify-content:center;
+}
+.modal-bg.open{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:28px;width:340px;max-width:90vw}
+.modal h3{font-size:16px;font-weight:800;margin-bottom:8px}
+.modal p{font-size:13px;color:var(--muted);line-height:1.5;margin-bottom:20px}
+.modal-actions{display:flex;gap:10px}
+.modal-cancel{flex:1;background:none;border:1px solid var(--border2);color:var(--muted);padding:10px;border-radius:8px;cursor:pointer;font-family:'Albert Sans',sans-serif;font-weight:700;font-size:13px;transition:all .15s}
+.modal-cancel:hover{border-color:var(--text);color:var(--text)}
+.modal-confirm{flex:1;background:var(--danger);color:#fff;border:none;padding:10px;border-radius:8px;cursor:pointer;font-family:'Albert Sans',sans-serif;font-weight:800;font-size:13px;transition:background .15s}
+.modal-confirm:hover{background:#cc2222}
+
+@media(max-width:900px){
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .container{padding:16px}
+  table{font-size:12px}
+  td,th{padding:10px}
+}
+@media(max-width:600px){
+  .stats{grid-template-columns:1fr 1fr}
+  .hide-mobile{display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-logo">Taffuzo<span>.</span> <span style="font-size:13px;color:#555;font-weight:600">Pet Match Admin</span></div>
+  <div class="topbar-right">
+    <div class="badge-live">● LIVE</div>
+    <form method="POST" action="/admin/logout" style="margin:0">
+      <button class="topbar-logout" type="submit">Sign out</button>
+    </form>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-label">Total Registrations</div>
+      <div class="stat-value accent">{{ total }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Dogs</div>
+      <div class="stat-value dog">{{ dogs }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Cats</div>
+      <div class="stat-value cat">{{ cats }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Cities</div>
+      <div class="stat-value">{{ cities }}</div>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <input class="search-input" type="text" id="search" placeholder="Search by name, owner, city…" oninput="filterTable()">
+    <select class="filter-select" id="filter-type" onchange="filterTable()">
+      <option value="">All pets</option>
+      <option value="dog">🐶 Dogs</option>
+      <option value="cat">🐱 Cats</option>
+    </select>
+    <select class="filter-select" id="filter-gender" onchange="filterTable()">
+      <option value="">All genders</option>
+      <option value="male">Male</option>
+      <option value="female">Female</option>
+    </select>
+    <select class="filter-select" id="filter-city" onchange="filterTable()">
+      <option value="">All cities</option>
+      {% for city in city_list %}
+      <option value="{{ city|lower }}">{{ city }}</option>
+      {% endfor %}
+    </select>
+    <div class="toolbar-gap"></div>
+    <a class="csv-btn" href="/admin/export-csv">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Export CSV
+    </a>
+  </div>
+
+  <div class="result-count" id="result-count"></div>
+
+  <!-- Table -->
+  <div class="table-wrap">
+    <table id="profiles-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Owner</th>
+          <th>Pet</th>
+          <th>Type</th>
+          <th>Gender</th>
+          <th class="hide-mobile">Age</th>
+          <th>City</th>
+          <th class="hide-mobile">Bio</th>
+          <th class="hide-mobile">Registered</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="table-body">
+        {% if profiles %}
+          {% for p in profiles %}
+          <tr
+            data-name="{{ p.pet_name|lower }}"
+            data-owner="{{ p.owner_name|lower }}"
+            data-city="{{ p.city|lower }}"
+            data-type="{{ p.pet_type }}"
+            data-gender="{{ p.gender }}"
+          >
+            <td style="color:var(--muted);font-size:11px">{{ p.id }}</td>
+            <td>
+              <div class="owner-name">{{ p.owner_name }}</div>
+              <div class="owner-phone">{{ p.owner_phone }}</div>
+            </td>
+            <td>
+              <div class="pet-name">{{ p.pet_name }}</div>
+              {% if p.breed %}<div class="pet-breed">{{ p.breed }}</div>{% endif %}
+            </td>
+            <td>
+              <span class="pill pill-{{ p.pet_type }}">
+                {% if p.pet_type == 'dog' %}🐶{% else %}🐱{% endif %}
+                {{ p.pet_type|capitalize }}
+              </span>
+            </td>
+            <td>
+              <span class="pill pill-{{ p.gender }}">{{ p.gender|capitalize }}</span>
+            </td>
+            <td class="hide-mobile">{{ p.age_years ~ ' yrs' if p.age_years else '—' }}</td>
+            <td><span class="city-text">{{ p.city }}</span></td>
+            <td class="hide-mobile"><div class="bio-text" title="{{ p.bio or '' }}">{{ p.bio or '—' }}</div></td>
+            <td class="hide-mobile"><div class="date-text">{{ p.created_at[:10] if p.created_at else '—' }}</div></td>
+            <td>
+              <button class="del-btn" onclick="confirmDelete({{ p.id }}, '{{ p.pet_name }}')" title="Delete">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr class="empty-row"><td colspan="10"><span class="empty-icon">🐾</span>No registrations yet.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Delete confirm modal -->
+<div class="modal-bg" id="del-modal">
+  <div class="modal">
+    <h3>Delete profile?</h3>
+    <p id="del-modal-msg">This will permanently remove the pet from Pet Match.</p>
+    <div class="modal-actions">
+      <button class="modal-cancel" onclick="closeModal()">Cancel</button>
+      <button class="modal-confirm" id="del-confirm-btn">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let deleteId = null;
+
+function confirmDelete(id, name) {
+    deleteId = id;
+    document.getElementById("del-modal-msg").textContent =
+        `This will permanently remove "${name}" from Pet Match. This cannot be undone.`;
+    document.getElementById("del-modal").classList.add("open");
+}
+function closeModal() {
+    document.getElementById("del-modal").classList.remove("open");
+    deleteId = null;
+}
+document.getElementById("del-confirm-btn").onclick = async function() {
+    if (!deleteId) return;
+    this.textContent = "Deleting…";
+    this.disabled = true;
+    try {
+        const resp = await fetch(`/admin/delete/${deleteId}`, { method: "POST" });
+        if (resp.ok) {
+            const row = document.querySelector(`tr[data-name]`);
+            // Remove row with matching id
+            const allRows = document.querySelectorAll("#table-body tr");
+            allRows.forEach(r => {
+                const delBtn = r.querySelector(".del-btn");
+                if (delBtn && delBtn.getAttribute("onclick").includes(`(${deleteId},`)) {
+                    r.remove();
+                }
+            });
+            closeModal();
+            updateCount();
+        } else {
+            alert("Delete failed. Please try again.");
+        }
+    } catch(e) {
+        alert("Error: " + e.message);
+    }
+    this.textContent = "Delete";
+    this.disabled = false;
+};
+
+function filterTable() {
+    const search = document.getElementById("search").value.toLowerCase();
+    const type   = document.getElementById("filter-type").value;
+    const gender = document.getElementById("filter-gender").value;
+    const city   = document.getElementById("filter-city").value;
+    let visible  = 0;
+
+    document.querySelectorAll("#table-body tr[data-name]").forEach(row => {
+        const matchSearch = !search ||
+            row.dataset.name.includes(search) ||
+            row.dataset.owner.includes(search) ||
+            row.dataset.city.includes(search);
+        const matchType   = !type   || row.dataset.type   === type;
+        const matchGender = !gender || row.dataset.gender === gender;
+        const matchCity   = !city   || row.dataset.city   === city;
+
+        const show = matchSearch && matchType && matchGender && matchCity;
+        row.style.display = show ? "" : "none";
+        if (show) visible++;
+    });
+    updateCount(visible);
+}
+
+function updateCount(n) {
+    const allRows = document.querySelectorAll("#table-body tr[data-name]").length;
+    const count   = (n === undefined) ? allRows : n;
+    document.getElementById("result-count").innerHTML =
+        `Showing <strong>${count}</strong> registration${count !== 1 ? "s" : ""}`;
+}
+
+document.getElementById("del-modal").addEventListener("click", function(e) {
+    if (e.target === this) closeModal();
+});
+
+updateCount();
+</script>
+</body>
+</html>"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin routes
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/admin", methods=["GET", "POST"])
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    if session.get("admin_logged_in"):
+        return redirect(url_for("admin_dashboard"))
+
+    error = None
+    if request.method == "POST":
+        if request.form.get("password") == ADMIN_PASSWORD:
+            session["admin_logged_in"] = True
+            session.permanent = False
+            return redirect(url_for("admin_dashboard"))
+        error = "Incorrect password. Please try again."
+
+    return render_template_string(ADMIN_LOGIN_HTML, error=error)
+
+
+@app.route("/admin/dashboard")
+@login_required
+def admin_dashboard():
+    with get_db() as conn:
+        profiles = [dict(r) for r in conn.execute(
+            "SELECT * FROM pet_profiles ORDER BY created_at DESC"
+        ).fetchall()]
+
+        total  = len(profiles)
+        dogs   = sum(1 for p in profiles if p["pet_type"] == "dog")
+        cats   = sum(1 for p in profiles if p["pet_type"] == "cat")
+        cities = len({p["city"].strip().lower() for p in profiles if p.get("city")})
+        city_list = sorted({p["city"].strip() for p in profiles if p.get("city")},
+                           key=lambda c: c.lower())
+
+    return render_template_string(
+        ADMIN_DASHBOARD_HTML,
+        profiles=profiles,
+        total=total, dogs=dogs, cats=cats, cities=cities,
+        city_list=city_list,
+    )
+
+
+@app.route("/admin/delete/<int:profile_id>", methods=["POST"])
+@login_required
+def admin_delete(profile_id):
+    with get_db() as conn:
+        conn.execute("DELETE FROM pet_profiles WHERE id = ?", (profile_id,))
+        conn.commit()
+    return jsonify({"success": True})
+
+
+@app.route("/admin/export-csv")
+@login_required
+def admin_export_csv():
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, owner_name, owner_phone, pet_name, pet_type, "
+            "breed, age_years, gender, city, bio, photo_url, created_at "
+            "FROM pet_profiles ORDER BY created_at DESC"
+        ).fetchall()
+
+    si = StringIO()
+    writer = csv.writer(si)
+    writer.writerow([
+        "ID", "Owner Name", "Owner Phone", "Pet Name", "Pet Type",
+        "Breed", "Age (years)", "Gender", "City", "Bio", "Photo URL", "Registered At"
+    ])
+    for row in rows:
+        writer.writerow(list(row))
+
+    output = make_response(si.getvalue())
+    output.headers["Content-Disposition"] = (
+        f"attachment; filename=petmatch_export_{datetime.date.today()}.csv"
+    )
+    output.headers["Content-type"] = "text/csv"
+    return output
+
+
+@app.route("/admin/logout", methods=["POST"])
+def admin_logout():
+    session.clear()
+    return redirect(url_for("admin_login"))
 
 
 @app.route("/chat", methods=["POST"])
