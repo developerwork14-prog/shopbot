@@ -160,6 +160,24 @@ def is_ingredient_question(user_message):
     return any(word in message for word in ingredient_words)
 
 
+def is_product_overview_question(user_message):
+    message = user_message.lower()
+    overview_phrases = [
+        "tell me about your products",
+        "tell me about you products",
+        "what products",
+        "your products",
+        "you products",
+        "product range",
+        "what do you sell",
+        "what do u sell",
+        "show products",
+        "show me products",
+    ]
+
+    return any(phrase in message for phrase in overview_phrases)
+
+
 def describe_product_details(product):
     details = product_text(product)
     item = format_product(product)
@@ -171,6 +189,24 @@ def describe_product_details(product):
         )
 
     return f"For {item['name']}: {details}"
+
+
+def product_overview_answer(products):
+    product_names = [
+        clean_text(product.get("name"))
+        for product in products[:6]
+        if clean_text(product.get("name"))
+    ]
+    examples = ""
+
+    if product_names:
+        examples = " Some options include " + ", ".join(product_names[:4]) + "."
+
+    return (
+        "Taffuzo offers pet food and treats for dogs and cats, including biscuits, "
+        "treats, and food options made for everyday feeding and rewards."
+        f"{examples} Tell me your pet type, age, and preference, and I can suggest a good option."
+    )
 
 
 def build_catalog_context(products):
@@ -192,6 +228,10 @@ def fallback_answer(user_message, products):
     matched_records = find_matching_product_records(products, user_message)
     matched = [format_product(product) for product in matched_records]
     message = user_message.lower()
+
+    if is_product_overview_question(user_message):
+        suggestions = [format_product(product) for product in products[:3]]
+        return product_overview_answer(products), suggestions
 
     if matched_records and is_ingredient_question(user_message):
         return describe_product_details(matched_records[0]), matched
@@ -242,10 +282,12 @@ def generate_ai_answer(user_message, products):
     "When the customer asks about products, what you sell, your catalog, or anything general "
     "about the store, summarize the available products from the catalog clearly and helpfully. "
     "Never say 'I found a few products that may match' — always give a real answer.\n"
-    "When the customer asks about a specific product's ingredients, contents, or what it "
-    "is made from, answer with the ingredient/details information from the product catalog. "
-    "Do not only say that products match the question.\n"
-    "If the question is about pets, dog food, cat food, treats, feeding, ingredients, "
+        "When the customer asks about a specific product's ingredients, contents, or what it "
+        "is made from, answer with the ingredient/details information from the product catalog. "
+        "Do not only say that products match the question.\n"
+        "When the customer asks broadly about Taffuzo products or what Taffuzo sells, summarize "
+        "the main product range and mention a few relevant examples from the catalog.\n"
+        "If the question is about pets, dog food, cat food, treats, feeding, ingredients, "
     "product choice, orders, or shopping, give a direct useful answer.\n"
     "Use the Taffuzo product catalog when it helps, but do not say you can only search products.\n"
     "If the question is general and not about Taffuzo, still answer briefly and politely, "
