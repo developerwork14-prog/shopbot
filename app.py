@@ -1,4 +1,6 @@
 import os
+import re
+from html import unescape
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -21,15 +23,22 @@ CORS(app, resources={
 
 WC_URL = "https://taffuzo.com/wp-json/wc/v3/products"
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+WC_CONSUMER_KEY = os.getenv("WC_CONSUMER_KEY")
+WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
 
-CK = "ck_0e43ab1bb8ea5984bea7d3a9ff048759e1705698"
-CS = "cs_28850237b523c3ad67ea291e8246cd92a09fcf8e"
 gemini_api_key = os.getenv("GEMINI_API_KEY")
 
 if gemini_api_key:
     genai.configure(api_key=gemini_api_key)
 
 gemini_model = genai.GenerativeModel(GEMINI_MODEL) if gemini_api_key else None
+
+
+def clean_text(value):
+    text = unescape(str(value or ""))
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
 def format_product(product):
@@ -44,10 +53,33 @@ def format_product(product):
     }
 
 
+def product_text(product):
+    attributes = []
+
+    for attribute in product.get("attributes") or []:
+        name = clean_text(attribute.get("name"))
+        options = ", ".join(clean_text(option) for option in attribute.get("options") or [])
+
+        if name and options:
+            attributes.append(f"{name}: {options}")
+
+    parts = [
+        product.get("name", ""),
+        product.get("short_description", ""),
+        product.get("description", ""),
+        " ".join(attributes),
+    ]
+
+    return clean_text(" ".join(parts))
+
+
 def fetch_products():
+    if not WC_CONSUMER_KEY or not WC_CONSUMER_SECRET:
+        raise ValueError("WooCommerce credentials are not configured")
+
     response = requests.get(
         WC_URL,
-        auth=(CK, CS),
+        auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
         headers={"Accept": "application/json"},
         params={"per_page": 50},
         timeout=10
@@ -61,7 +93,7 @@ def fetch_products():
     return products
 
 
-def find_matching_products(products, user_message):
+def find_matching_product_records(products, user_message, limit=3):
     words = [
         word
         for word in user_message.lower().replace("-", " ").split()
@@ -71,7 +103,7 @@ def find_matching_products(products, user_message):
 
     for product in products:
         name = product.get("name", "").lower()
-        description = product.get("short_description", "").lower()
+        description = product_text(product).lower()
         haystack = f"{name} {description}"
         score = sum(1 for word in words if word in haystack)
 
@@ -79,24 +111,68 @@ def find_matching_products(products, user_message):
             scored.append((score, product))
 
     scored.sort(key=lambda item: item[0], reverse=True)
-    return [format_product(product) for _, product in scored[:3]]
+    return [product for _, product in scored[:limit]]
+
+
+def find_matching_products(products, user_message):
+    return [
+        format_product(product)
+        for product in find_matching_product_records(products, user_message)
+    ]
+
+
+def is_ingredient_question(user_message):
+    message = user_message.lower()
+    ingredient_words = [
+        "ingredient",
+        "ingredients",
+        "made of",
+        "made from",
+        "contains",
+        "content",
+        "composition",
+        "what is used",
+        "which are used",
+    ]
+
+    return any(word in message for word in ingredient_words)
+
+
+def describe_product_details(product):
+    details = product_text(product)
+    item = format_product(product)
+
+    if not details:
+        return (
+            f"I found {item['name']}, but the ingredient details are not listed in the "
+            "product data I can access right now."
+        )
+
+    return f"For {item['name']}: {details}"
 
 
 def build_catalog_context(products):
     catalog_lines = []
 
-    for product in products[:10]:
+    for product in products[:15]:
         item = format_product(product)
+        details = product_text(product)
         catalog_lines.append(
-            f"- {item['name']} | Price: INR {item['price'] or 'not listed'} | URL: {item['url']}"
+            "- "
+            f"{item['name']} | Price: INR {item['price'] or 'not listed'} | "
+            f"Details: {details or 'not listed'} | URL: {item['url']}"
         )
 
     return "\n".join(catalog_lines)
 
 
 def fallback_answer(user_message, products):
-    matched = find_matching_products(products, user_message)
+    matched_records = find_matching_product_records(products, user_message)
+    matched = [format_product(product) for product in matched_records]
     message = user_message.lower()
+
+    if matched_records and is_ingredient_question(user_message):
+        return describe_product_details(matched_records[0]), matched
 
     if matched:
         return "I found a few Taffuzo products that may match your question.", matched
@@ -141,6 +217,9 @@ def generate_ai_answer(user_message, products):
     prompt = (
         "You are Taffuzo ShopBot, a friendly AI assistant on Taffuzo.com.\n"
         "Answer customer questions naturally and immediately, like a helpful store assistant.\n"
+        "When the customer asks about a specific product's ingredients, contents, or what it "
+        "is made from, answer with the ingredient/details information from the product catalog. "
+        "Do not only say that products match the question.\n"
         "If the question is about pets, dog food, cat food, treats, feeding, ingredients, "
         "product choice, orders, or shopping, give a direct useful answer.\n"
         "Use the Taffuzo product catalog when it helps, but do not say you can only search products.\n"
