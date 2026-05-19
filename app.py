@@ -25,6 +25,8 @@ WC_URL = "https://taffuzo.com/wp-json/wc/v3/products"
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 WC_CONSUMER_KEY = os.getenv("WC_CONSUMER_KEY")
 WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
+HUMAN_AGENT_WHATSAPP = os.getenv("HUMAN_AGENT_WHATSAPP", "")
+HUMAN_AGENT_EMAIL = os.getenv("HUMAN_AGENT_EMAIL", "")
 
 gemini_api_key = os.getenv("GEMINI_API_KEY")
 
@@ -32,6 +34,26 @@ if gemini_api_key:
     genai.configure(api_key=gemini_api_key)
 
 gemini_model = genai.GenerativeModel(GEMINI_MODEL) if gemini_api_key else None
+
+
+def human_agent_response():
+    contact_lines = []
+
+    if HUMAN_AGENT_WHATSAPP:
+        contact_lines.append(f"WhatsApp: {HUMAN_AGENT_WHATSAPP}")
+
+    if HUMAN_AGENT_EMAIL:
+        contact_lines.append(f"Email: {HUMAN_AGENT_EMAIL}")
+
+    if contact_lines:
+        contact_text = " ".join(contact_lines)
+    else:
+        contact_text = "Our team will help you shortly."
+
+    return (
+        "Sure, I can connect you with a human agent. "
+        f"{contact_text}"
+    )
 
 
 def clean_text(value):
@@ -249,6 +271,20 @@ def chat():
 
     if not user_message:
         return jsonify({"error": "Send JSON like {'message': 'shirt'}"}), 400
+
+    if user_message.lower() in {
+        "request_human_agent",
+        "human agent",
+        "agent",
+        "talk to human",
+        "talk to agent",
+    }:
+        return jsonify({
+            "answer": human_agent_response(),
+            "products": [],
+            "ai_enabled": bool(gemini_model),
+            "action": "human_agent"
+        })
 
     try:
         products = fetch_products()
