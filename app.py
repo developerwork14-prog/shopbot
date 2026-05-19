@@ -95,6 +95,63 @@ def product_text(product):
     return clean_text(" ".join(parts))
 
 
+def product_source_text(product):
+    parts = [
+        product.get("short_description", ""),
+        product.get("description", ""),
+    ]
+    return clean_text(" ".join(parts))
+
+
+def extract_section(text, start_labels, stop_labels):
+    lower_text = text.lower()
+    starts = [
+        lower_text.find(label.lower())
+        for label in start_labels
+        if lower_text.find(label.lower()) != -1
+    ]
+
+    if not starts:
+        return ""
+
+    start = min(starts)
+    end = len(text)
+
+    for label in stop_labels:
+        position = lower_text.find(label.lower(), start + 1)
+
+        if position != -1:
+            end = min(end, position)
+
+    return clean_text(text[start:end])
+
+
+def product_ingredients(product):
+    text = product_source_text(product)
+    ingredients = extract_section(
+        text,
+        ["Ingredients:", "Ingredients -", "Ingredient:"],
+        [
+            "Made with",
+            "Our chef",
+            "Supports:",
+            "Why our",
+            "HealthyPet",
+            "Quick changes",
+            "Taffuzo",
+            "Transitional",
+            "Suitable",
+        ],
+    )
+
+    if not ingredients:
+        return ""
+
+    ingredients = re.sub(r"(?i)^ingredients\s*[:\-]\s*", "", ingredients)
+    ingredients = re.sub(r"\s*-\s*and\s+that's\s+it!?\s*$", "", ingredients, flags=re.I)
+    return clean_text(ingredients)
+
+
 def fetch_products():
     if not WC_CONSUMER_KEY or not WC_CONSUMER_SECRET:
         raise ValueError("WooCommerce credentials are not configured")
@@ -312,16 +369,36 @@ def pet_age_answer(user_message):
 
 
 def describe_product_details(product):
-    details = product_text(product)
     item = format_product(product)
+    ingredients = product_ingredients(product)
+    details = product_text(product)
 
-    if not details:
+    if not ingredients and not details:
         return (
             f"I found {item['name']}, but the ingredient details are not listed in the "
             "product data I can access right now."
         )
 
-    return f"For {item['name']}: {details}"
+    if ingredients:
+        ingredient_list = [
+            clean_text(ingredient)
+            for ingredient in re.split(r",|;", ingredients)
+            if clean_text(ingredient)
+        ]
+        bullets = "\n".join(f"- {ingredient}" for ingredient in ingredient_list[:8])
+
+        return (
+            f"{item['name']}\n\n"
+            "Ingredients used:\n"
+            f"{bullets}\n\n"
+            "It is positioned as a natural treat with zero preservatives."
+        )
+
+    short_details = " ".join(details.split()[:45])
+    return (
+        f"{item['name']}\n\n"
+        f"Details: {short_details}..."
+    )
 
 
 def product_overview_answer(products):
@@ -347,7 +424,8 @@ def build_catalog_context(products):
 
     for product in products[:15]:
         item = format_product(product)
-        details = product_text(product)
+        ingredients = product_ingredients(product)
+        details = ingredients or " ".join(product_text(product).split()[:45])
         catalog_lines.append(
             "- "
             f"{item['name']} | Price: INR {item['price'] or 'not listed'} | "
@@ -459,7 +537,8 @@ def generate_ai_answer(user_message, products):
         "about the store, summarize the available products from the catalog clearly and helpfully. "
         "Never say 'I found a few products that may match' - always give a real answer.\n"
         "When the customer asks about a specific product's ingredients, contents, or what it is "
-        "made from, answer with the ingredient/details information from the product catalog.\n"
+        "made from, answer in 3 to 5 short bullet points. Mention only ingredients and key "
+        "benefits. Do not paste the full product description or transition guide.\n"
         "Do not diagnose medical problems. For illness, allergies, pregnancy, poisoning, or serious "
         "symptoms, recommend a veterinarian.\n"
         "Keep answers short, practical, and easy for Indian customers to understand. Prices are "
